@@ -1,84 +1,59 @@
 ---
-title: 简易版Promise的实现
+title: 手写一个promise
 ---
 
-##### 从两道题开始
+#### 从做题开始
 
 ```javascript
-// 第一题
-const wait = time => new Promise(resolve => process.nextTick(resolve, time))
+const foo = () => (new Promise((resolve, reject) => {
+  const p = new Promise((resolve, reject) => {
+    console.log(0);
+    setTimeout(() => {
+      console.log(1);
+      resolve(2);
+    }, 0)
+    resolve(3);
+  });
 
-wait(200)
-  .then(() => new Promise(res => res('foo')))
-  .then(a => a)
-  .then(b => console.log(b))
-  .then(() => null)
-  .then(c => console.log(c))
-  .then(() => {throw new Error('foo');})
-  .then(
-    d => console.log(`d: ${ d }`),
-    e => console.log(e))
-  .then(f => console.log(`f: ${ f }`))
-  .catch(e => console.log(e))
-  .then(() => { throw new Error('bar'); })
-  .then(g => console.log(`g: ${ g }`))
+  resolve(4);
 
-// 第二题
-const first = () => (new Promise((resolve,reject)=>{
-    console.log(3);
-    let p = new Promise((resolve, reject)=>{
-         console.log(7);
-        process.nextTick(()=>{
-           console.log(5);
-           resolve(6); 
-        },0)
-        resolve(1);
-    }); 
-    resolve(2);
-    p.then((arg)=>{
-        console.log(arg);
-    });
+  p.then((value) => {
+    console.log(value);
+    // throw new Error('something wrong')
+  });
 
+  return p
 }));
 
-first().then((arg)=>{
-    console.log(arg);
-});
-console.log(4);
+foo()
+  .then(() => new Promise(resolve => resolve(5)))
+  .then(null, err => console.log(err))
+  .then(value => console.log(value))
+
+const anotherPromise = Promise.resolve(100)
+setTimeout(() => {
+  anotherPromise.then(value => console.log(value))
+}, 1000)
 ```
 
-大家说说看，控制台上将输出什么？
+#### Promise/A+规范
 
+[Promise/A+规范](https://github.com/promises-aplus/promises-spec)
 
-
-正确答案是：
-第一题：foo、null、Error: full、undefined、Uncaught (in promise) Error: bar
-第二题：3、7、4、1、2、5
-
-
-
-好了，接下来步入正题，看看Promise的实现机制吧。
-
-##### Promise/A+规范
-
-在开始实现之前，大家可以先查阅下[Promise/A+的规范](https://github.com/promises-aplus/promises-spec)。
-
-其中，几个重要的术语要注意下：
-
-1. "promise" is an object or function with a `then` method whose behavior conforms to this specification.
-2. "thenable" is an object or function that defines a `then` method.
-3. "value" is any legal JavaScript value (including `undefined`, a thenable, or a promise).
-4. "exception" is a value that is thrown using the `throw` statement.
-5. "reason" is a value that indicates why a promise was rejected.
-
-除此之外，对于`Promise`中的then方法，规范有非常详细的要求限制，大家可以仔细阅读。这里就不罗列那好大一堆的东西了，直接开始撸代码吧！
-
-##### 简易版Promise的实现
+#### 代码实现之基本篇
 
 ```javascript
 const PENDING = 'pending'
 const REJECTED = 'rejected'
-const RESOLVED  = 'resolved'
+const RESOLVED = 'resolved'
+
+const resolvePromise = (returnedValue, resolve, reject) => {
+  if (returnedValue instanceof Promise) {
+    returnedValue.then(resolve, reject)
+  } else {
+    resolve(returnedValue)
+  }
+}
 
 class Promise {
   constructor(executor) {
@@ -88,7 +63,6 @@ class Promise {
     this.onRejectedQueue = []
 
     const resolve = (value) => {
-      // 注册在then里头的回调要异步执行，这里用process.nextTick模拟异步
       if (this.status === PENDING) {
         process.nextTick(() => {
           this.status = RESOLVED
@@ -99,7 +73,6 @@ class Promise {
     }
 
     const reject = (err) => {
-      // 注册在then里头的回调要异步执行，这里用process.nextTick模拟异步
       if (this.status === PENDING) {
         process.nextTick(() => {
           this.status = REJECTED
@@ -116,32 +89,32 @@ class Promise {
     }
   }
 
-  static resolve (value) {
+  static resolve(value) {
     return new Promise((resolve) => {
       resolve(value)
     })
   }
 
-  static reject (err) {
+  static reject(err) {
     return new Promise((resolve, reject) => {
       reject(err)
     })
   }
 
-  then (onResolved, onRejected) {
+  then(onResolved, onRejected) {
     onResolved = typeof onResolved === 'function' ? onResolved : value => value
-    onRejected = typeof onRejected === 'function' ? onRejected : err => { throw err }
+    onRejected = typeof onRejected === 'function' ? onRejected : err => {
+      throw err
+    }
+
+    let newPromise
 
     if (this.status === PENDING) {
-      return new Promise((resolve, reject) => {
+      newPromise = new Promise((resolve, reject) => {
         this.onResolvedQueue.push(value => {
           try {
             const returnedValue = onResolved(value)
-            if (returnedValue instanceof Promise) {
-              returnedValue.then(resolve, reject)
-            } else {
-              resolve(returnedValue)
-            }
+            resolvePromise(returnedValue)
           } catch (err) {
             reject(err)
           }
@@ -149,11 +122,7 @@ class Promise {
         this.onRejectedQueue.push(err => {
           try {
             const returnedValue = onRejected(err)
-            if (returnedValue instanceof Promise) {
-              returnedValue.then(resolve, reject)
-            } else {
-              resolve(returnedValue)
-            }
+            resolvePromise(returnedValue)
           } catch (err) {
             reject(err)
           }
@@ -162,16 +131,11 @@ class Promise {
     }
 
     if (this.status === RESOLVED) {
-      return new Promise((resolve, reject) => {
-        // 注册在then里头的回调要异步执行，这里用process.nextTick模拟异步
+      newPromise = new Promise((resolve, reject) => {
         process.nextTick(() => {
           try {
             const returnedValue = onResolved(this.value)
-            if (returnedValue instanceof Promise) {
-              returnedValue.then(resolve, reject)
-            } else {
-              resolve(returnedValue)
-            }
+            resolvePromise(returnedValue)
           } catch (err) {
             reject(err)
           }
@@ -180,22 +144,19 @@ class Promise {
     }
 
     if (this.status === REJECTED) {
-      // 注册在then里头的回调要异步执行，这里用process.nextTick模拟异步
-      return new Promise((resolve, reject) => {
+      newPromise = new Promise((resolve, reject) => {
         process.nextTick(() => {
           try {
             const returnedValue = onRejected(this.value)
-            if (returnedValue instanceof Promise) {
-              returnedValue.then(resolve, reject)
-            } else {
-              resolve(returnedValue)
-            }
+            resolvePromise(returnedValue)
           } catch (err) {
             reject(err)
           }
         })
       })
     }
+
+    return newPromise
   }
 
   catch (onRejected) {
@@ -204,7 +165,7 @@ class Promise {
 }
 ```
 
-如上，一个简易版的`Promise`就实现了，但如果大家直接拿上面的代码去跑[Promise的测试用例](https://github.com/promises-aplus/promises-tests)的话，会很尴尬的发现……其实跑不通o(╯□╰)o。这主要是因为官方考虑到当前的第三库或多或少都有自己的Promise实现，为了让这些不同实现的Promise可以链式调用，官方做了一系列的假设和约束。感兴趣的同学可以去仔细阅读[这部分内容](https://github.com/promises-aplus/promises-spec#the-promise-resolution-procedure)。从学习`Promise`的角度出发，上面的实现个人感觉已经足够了，倘若把`[[Resolve]](promise, x)`这块内容也实现，从原理的可读性上看反而变差了。最后，还是送上可以通过所有TC的最终版Promise:
+#### 代码实现之完全篇
 
 ```javascript
 const PENDING = 'pending'
@@ -371,4 +332,5 @@ class Promise {
     return this.then(null, onRejected)
   }
 }
+
 ```
